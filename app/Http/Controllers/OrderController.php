@@ -4,8 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\User;
+use App\Mail\NewOrderNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 
 class OrderController extends Controller
 {
@@ -47,10 +50,7 @@ class OrderController extends Controller
         return response()->json($order);
     }
 
-    /**
-     * Store a newly created order.
-     */
-    public function store(Request $request)
+   public function store(Request $request)
     {
         $request->validate([
             'shipping_address' => 'required|string',
@@ -66,7 +66,6 @@ class OrderController extends Controller
             foreach ($request->items as $item) {
                 $product = Product::find($item['product_id']);
                 
-                // Check stock
                 if ($product->stock < $item['quantity']) {
                     return response()->json([
                         'message' => "Insufficient stock for {$product->name}"
@@ -96,9 +95,14 @@ class OrderController extends Controller
                     'price' => $product->price,
                 ]);
                 
-                // Decrease stock
                 $product->decrement('stock', $item['quantity']);
             }
+
+            // Load relationships for email
+            $order->load('items.product', 'user');
+
+            // Send email notification to all admin users
+            $this->notifyAdmins($order);
 
             Log::info('Order created', [
                 'order_id' => $order->id,
@@ -116,6 +120,27 @@ class OrderController extends Controller
         }
     }
 
+    /**
+     * Send new order notification to all admin users
+     */
+    private function notifyAdmins(Order $order)
+    {
+        try {
+            // Get all admin users
+            $admins = User::where('role', 'admin')->get();
+            
+            foreach ($admins as $admin) {
+                Mail::to($admin->email)->send(new NewOrderNotification($order));
+            }
+            
+            Log::info('Admin notifications sent for order #' . $order->id, [
+                'admin_count' => $admins->count()
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to send admin notifications: ' . $e->getMessage());
+        }
+    }
+    
     /**
      * Cancel an order.
      */
