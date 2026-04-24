@@ -7,6 +7,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Mail\NewOrderNotification;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
@@ -35,22 +36,16 @@ class OrderController extends Controller
             ->find($id);
 
         if (!$order) {
-            // Check if user is admin and can view any order
-            if ($request->user()->role === 'admin') {
-                $order = Order::with('items.product')->find($id);
-            }
-            
-            if (!$order) {
-                return response()->json([
-                    'message' => 'Order not found'
-                ], 404);
-            }
+            return response()->json(['message' => 'Order not found'], 404);
         }
 
         return response()->json($order);
     }
 
-   public function store(Request $request)
+    /**
+     * Store a newly created order.
+     */
+    public function store(Request $request)
     {
         $request->validate([
             'shipping_address' => 'required|string',
@@ -61,21 +56,22 @@ class OrderController extends Controller
         ]);
 
         try {
-            // Calculate total amount
+            DB::beginTransaction();
+
             $totalAmount = 0;
+            
             foreach ($request->items as $item) {
                 $product = Product::find($item['product_id']);
                 
                 if ($product->stock < $item['quantity']) {
                     return response()->json([
-                        'message' => "Insufficient stock for {$product->name}"
+                        'message' => "Insufficient stock for {$product->name}. Available: {$product->stock}"
                     ], 400);
                 }
                 
                 $totalAmount += $product->price * $item['quantity'];
             }
 
-            // Create order
             $order = Order::create([
                 'user_id' => $request->user()->id,
                 'shipping_address' => $request->shipping_address,
@@ -85,7 +81,6 @@ class OrderController extends Controller
                 'notes' => $request->notes,
             ]);
 
-            // Create order items and update stock
             foreach ($request->items as $item) {
                 $product = Product::find($item['product_id']);
                 
@@ -98,22 +93,17 @@ class OrderController extends Controller
                 $product->decrement('stock', $item['quantity']);
             }
 
-            // Load relationships for email
             $order->load('items.product', 'user');
-
-            // Send email notification to all admin users
             $this->notifyAdmins($order);
 
-            Log::info('Order created', [
-                'order_id' => $order->id,
-                'user_id' => $request->user()->id,
-                'total' => $totalAmount
-            ]);
+            DB::commit();
 
             return response()->json($order->load('items.product'), 201);
             
         } catch (\Exception $e) {
+            DB::rollBack();
             Log::error('Order creation failed: ' . $e->getMessage());
+            
             return response()->json([
                 'message' => 'Failed to create order. Please try again.'
             ], 500);
@@ -121,28 +111,7 @@ class OrderController extends Controller
     }
 
     /**
-     * Send new order notification to all admin users
-     */
-    private function notifyAdmins(Order $order)
-    {
-        try {
-            // Get all admin users
-            $admins = User::where('role', 'admin')->get();
-            
-            foreach ($admins as $admin) {
-                Mail::to($admin->email)->send(new NewOrderNotification($order));
-            }
-            
-            Log::info('Admin notifications sent for order #' . $order->id, [
-                'admin_count' => $admins->count()
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Failed to send admin notifications: ' . $e->getMessage());
-        }
-    }
-    
-    /**
-     * Cancel an order.
+     * Cancel an order (ONLY ONE cancel method).
      */
     public function cancel(Request $request, $id)
     {
@@ -150,30 +119,57 @@ class OrderController extends Controller
             ->find($id);
 
         if (!$order) {
-            return response()->json([
-                'message' => 'Order not found'
-            ], 404);
+            return response()->json(['message' => 'Order not found'], 404);
         }
 
-        // Only allow cancellation of pending orders
-        if ($order->status !== 'pending') {
+        if (!in_array($order->status, ['pending', 'processing'])) {
             return response()->json([
-                'message' => 'Only pending orders can be cancelled'
+                'message' => 'Only pending or processing orders can be cancelled'
             ], 400);
         }
 
-        // Restore stock
-        foreach ($order->items as $item) {
-            $product = Product::find($item->product_id);
-            if ($product) {
-                $product->increment('stock', $item->quantity);
+        try {
+            DB::beginTransaction();
+
+            foreach ($order->items as $item) {
+                $product = Product::find($item->product_id);
+                if ($product) {
+                    $product->increment('stock', $item->quantity);
+                }
             }
+
+            $order->update(['status' => 'cancelled']);
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Order cancelled successfully',
+                'order' => $order->load('items.product')
+            ]);
+            
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Order cancellation failed: ' . $e->getMessage());
+            
+            return response()->json([
+                'message' => 'Failed to cancel order'
+            ], 500);
         }
+    }
 
-        $order->update(['status' => 'cancelled']);
-
-        return response()->json([
-            'message' => 'Order cancelled successfully'
-        ]);
+    /**
+     * Send new order notification to all admin users.
+     */
+    private function notifyAdmins(Order $order)
+    {
+        try {
+            $admins = User::where('role', 'admin')->get();
+            
+            foreach ($admins as $admin) {
+                Mail::to($admin->email)->queue(new NewOrderNotification($order));
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to send admin notifications: ' . $e->getMessage());
+        }
     }
 }
