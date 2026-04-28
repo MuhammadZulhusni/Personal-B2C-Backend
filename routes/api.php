@@ -8,6 +8,9 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController; 
 use App\Http\Controllers\Admin\AdminProductController;
 use App\Http\Controllers\Admin\AdminOrderController;
+use App\Http\Controllers\AiSuggestionController;
+
+Route::post('/ai/suggest', [AiSuggestionController::class, 'suggest']);
 
 // Public Authentication Routes
 Route::post('/register', [AuthController::class, 'register']);
@@ -48,4 +51,14 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function ()
     
     Route::get('/orders', [AdminOrderController::class, 'index']);
     Route::put('/orders/{order}/status', [AdminOrderController::class, 'updateStatus']);
+
+    Route::get('/analytics', [App\Http\Controllers\Admin\AdminAnalyticsController::class, 'index']);
+    Route::get('/finance', [App\Http\Controllers\Admin\AdminFinanceController::class, 'index']);
+
+    // Profile Management
+    Route::get('/profile', [App\Http\Controllers\Admin\AdminProfileController::class, 'show']);
+    Route::put('/profile', [App\Http\Controllers\Admin\AdminProfileController::class, 'update']);
+    Route::post('/profile/avatar', [App\Http\Controllers\Admin\AdminProfileController::class, 'uploadAvatar']);
+    Route::delete('/profile/avatar', [App\Http\Controllers\Admin\AdminProfileController::class, 'removeAvatar']);
+    Route::put('/profile/password', [App\Http\Controllers\Admin\AdminProfileController::class, 'changePassword']);
 });
