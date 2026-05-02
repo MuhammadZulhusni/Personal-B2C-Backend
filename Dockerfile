@@ -1,45 +1,36 @@
-FROM php:8.2-cli
+FROM php:8.2-cli-alpine
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install only essential packages
+RUN apk add --no-cache \
     git \
     curl \
+    sqlite \
+    sqlite-dev \
     libpng-dev \
-    libonig-dev \
+    oniguruma-dev \
     libxml2-dev \
     zip \
-    unzip \
-    sqlite3 \
-    libsqlite3-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    unzip
 
-# Install PHP extensions
-RUN docker-php-ext-install pdo pdo_mysql pdo_sqlite mbstring exif pcntl bcmath gd
+# Install only necessary PHP extensions
+RUN docker-php-ext-install pdo pdo_mysql pdo_sqlite mbstring bcmath
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Set working directory
 WORKDIR /var/www
 
-# Copy all files to container
+# Copy application
 COPY . .
 
-# Install PHP dependencies
-RUN composer install --no-dev --optimize-autoloader
+# Install dependencies
+RUN composer install --no-dev --optimize-autoloader --no-interaction
 
-# Generate Laravel key (will be overridden by env variable)
-RUN php artisan key:generate --force
+# Setup storage
+RUN mkdir -p /var/data && \
+    touch /var/data/database.sqlite && \
+    chmod -R 777 /var/data storage bootstrap/cache
 
-# Set permissions for storage and cache
-RUN chmod -R 777 storage bootstrap/cache
-
-# Create SQLite database directory
-RUN mkdir -p /var/data && touch /var/data/database.sqlite && chmod 777 /var/data/database.sqlite
-
-# Expose port
 EXPOSE 8000
 
-# Start Laravel server
 CMD php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=${PORT:-8000}
